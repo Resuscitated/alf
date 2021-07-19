@@ -50,7 +50,10 @@ from absl import flags
 from absl import logging
 import os
 import pathlib
+
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 
 from alf.utils import common
 import alf.utils.external_configurables
@@ -72,22 +75,48 @@ def _define_flags():
 FLAGS = flags.FLAGS
 
 
+def single_worker(rank: int, conf_file: str, root_dir: str):
+    dist.init_process_group('nccl', rank=rank, world_size=2)
+    common.parse_conf_file(conf_file)
+    trainer_conf = policy_trainer.TrainerConfig(root_dir=root_dir)
+
+    if torch.cuda.is_available():
+        alf.set_default_device("cuda")
+
+    print(f'Initialize trainer on device {rank}')
+    trainer = policy_trainer.RLTrainer(trainer_conf, rank=rank)
+    trainer.train()
+
+
 @alf.configurable
-def train_eval(root_dir):
+def train_eval(root_dir, conf_file: str):
     """Train and evaluate algorithm
 
     Args:
         root_dir (str): directory for saving summary and checkpoints
     """
-    trainer_conf = policy_trainer.TrainerConfig(root_dir=root_dir)
-    if trainer_conf.ml_type == 'rl':
-        trainer = policy_trainer.RLTrainer(trainer_conf)
-    elif trainer_conf.ml_type == 'sl':
-        trainer = policy_trainer.SLTrainer(trainer_conf)
-    else:
-        raise ValueError("Unsupported ml_type: %s" % trainer_conf.ml_type)
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
 
-    trainer.train()
+    try:
+        mp.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+
+    processes = []
+    for i in range(2):
+        processes.append(
+            mp.Process(target=single_worker, args=(i, conf_file, root_dir)))
+        processes[i].start()
+
+    for proc in processes:
+        proc.join()
+
+    # elif trainer_conf.ml_type == 'sl':
+    #     trainer = policy_trainer.SLTrainer(trainer_conf)
+    #     trainer.train()
+    # else:
+    #     raise ValueError("Unsupported ml_type: %s" % trainer_conf.ml_type)
 
 
 def main(_):
@@ -105,8 +134,8 @@ def main(_):
 
     conf_file = common.get_conf_file()
     try:
-        common.parse_conf_file(conf_file)
-        train_eval(root_dir)
+        # common.parse_conf_file(conf_file)
+        train_eval(root_dir, conf_file)
     finally:
         alf.close_env()
 
@@ -115,6 +144,6 @@ if __name__ == '__main__':
     _define_flags()
     logging.set_verbosity(logging.INFO)
     flags.mark_flag_as_required('root_dir')
-    if torch.cuda.is_available():
-        alf.set_default_device("cuda")
+    # if torch.cuda.is_available():
+    #     alf.set_default_device("cuda")
     app.run(main)

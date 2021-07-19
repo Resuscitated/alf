@@ -132,6 +132,10 @@ class Trainer(object):
 
     def train(self):
         """Perform training."""
+        print(f'Perform Training')
+        if self._rank == 0:
+            from pudb.remote import set_trace
+            set_trace()
         self._restore_checkpoint()
         alf.summary.enable_summary()
 
@@ -149,6 +153,7 @@ class Trainer(object):
 
         checkpoint_saved = False
         try:
+            print(f'Try training')
             if self._config.profiling:
                 import cProfile, pstats, io
                 pr = cProfile.Profile()
@@ -284,14 +289,14 @@ class Trainer(object):
 class RLTrainer(Trainer):
     """Trainer for reinforcement learning. """
 
-    def __init__(self, config: TrainerConfig):
+    def __init__(self, config: TrainerConfig, rank: int):
         """
 
         Args:
             config (TrainerConfig): configuration used to construct this trainer
         """
         super().__init__(config)
-
+        self._rank = rank
         self._num_env_steps = config.num_env_steps
         self._num_iterations = config.num_iterations
         assert (self._num_iterations + self._num_env_steps > 0
@@ -324,6 +329,12 @@ class RLTrainer(Trainer):
             config=self._config,
             debug_summaries=self._debug_summaries)
         self._algorithm.set_path('')
+        nn.parallel.DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(
+            self._algorithm,
+            ['_rl_algorithm._optimizers.0'])
+        self._algorithm = nn.parallel.DistributedDataParallel(
+            self._algorithm.to(rank), device_ids=[rank],
+            find_unused_parameters=True)
 
         self._eval_env = None
         # Create a thread env to expose subprocess gin/alf configurations
@@ -376,6 +387,7 @@ class RLTrainer(Trainer):
             self._thread_env.close()
 
     def _train(self):
+        print(f'_train()')
         env = alf.get_env()
         env.reset()
         if self._eval_env:
@@ -383,7 +395,7 @@ class RLTrainer(Trainer):
 
         begin_iter_num = int(self._trainer_progress._iter_num)
         iter_num = begin_iter_num
-
+        print(f'begin iter = {iter_num}')
         checkpoint_interval = math.ceil(
             (self._num_iterations
              or self._num_env_steps) / self._num_checkpoints)
