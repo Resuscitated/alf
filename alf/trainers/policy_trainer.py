@@ -133,9 +133,6 @@ class Trainer(object):
     def train(self):
         """Perform training."""
         print(f'Perform Training')
-        if self._rank == 0:
-            from pudb.remote import set_trace
-            set_trace()
         self._restore_checkpoint()
         alf.summary.enable_summary()
 
@@ -225,10 +222,10 @@ class Trainer(object):
             alf.summary.text('commandline', ' '.join(sys.argv))
             alf.summary.text(
                 'optimizers',
-                _markdownify(self._algorithm.get_optimizer_info()))
+                _markdownify(self._algorithm.module.get_optimizer_info()))
             alf.summary.text(
                 'unoptimized_parameters',
-                _markdownify(self._algorithm.get_unoptimized_parameter_info()))
+                _markdownify(self._algorithm.module.get_unoptimized_parameter_info()))
             alf.summary.text('revision', git_utils.get_revision())
             alf.summary.text('diff', _markdownify(git_utils.get_diff()))
             alf.summary.text('seed', str(self._random_seed))
@@ -267,7 +264,7 @@ class Trainer(object):
             # Some objects (e.g. ReplayBuffer) are constructed lazily in algorithm.
             # They only appear after one training iteration. So we need to run
             # train_iter() once before loading the checkpoint
-            self._algorithm.train_iter()
+            self._algorithm.module.train_iter()
 
         try:
             recovered_global_step = checkpointer.load()
@@ -289,14 +286,13 @@ class Trainer(object):
 class RLTrainer(Trainer):
     """Trainer for reinforcement learning. """
 
-    def __init__(self, config: TrainerConfig, rank: int):
+    def __init__(self, config: TrainerConfig):
         """
 
         Args:
             config (TrainerConfig): configuration used to construct this trainer
         """
         super().__init__(config)
-        self._rank = rank
         self._num_env_steps = config.num_env_steps
         self._num_iterations = config.num_iterations
         assert (self._num_iterations + self._num_env_steps > 0
@@ -329,11 +325,13 @@ class RLTrainer(Trainer):
             config=self._config,
             debug_summaries=self._debug_summaries)
         self._algorithm.set_path('')
+        rank = alf.PerProcessContext().rank
+        self._algorithm = self._algorithm.to(rank)
         nn.parallel.DistributedDataParallel._set_params_and_buffers_to_ignore_for_model(
             self._algorithm,
             ['_rl_algorithm._optimizers.0'])
         self._algorithm = nn.parallel.DistributedDataParallel(
-            self._algorithm.to(rank), device_ids=[rank],
+            self._algorithm, device_ids=[rank],
             find_unused_parameters=True)
 
         self._eval_env = None
@@ -387,7 +385,10 @@ class RLTrainer(Trainer):
             self._thread_env.close()
 
     def _train(self):
-        print(f'_train()')
+        print(f'_train() {alf.PerProcessContext().rank}')
+        # if alf.PerProcessContext().rank == 1:
+        #     from pudb.remote import set_trace
+        #     set_trace()
         env = alf.get_env()
         env.reset()
         if self._eval_env:
@@ -404,16 +405,16 @@ class RLTrainer(Trainer):
             time_to_checkpoint = self._trainer_progress._iter_num + checkpoint_interval
         else:
             time_to_checkpoint = self._trainer_progress._env_steps + checkpoint_interval
-
         while True:
             t0 = time.time()
             with record_time("time/train_iter"):
-                train_steps = self._algorithm.train_iter()
+                train_steps = self._algorithm.module.train_iter()
             t = time.time() - t0
             logging.log_every_n_seconds(
                 logging.INFO,
-                '%s -> %s: %s time=%.3f throughput=%0.2f' %
-                (common.get_conf_file(),
+                '[rank=%d] %s -> %s: %s time=%.3f throughput=%0.2f' %
+                (alf.PerProcessContext().rank,
+                 common.get_conf_file(),
                  os.path.basename(self._root_dir.strip('/')), iter_num, t,
                  int(train_steps) / t),
                 n_seconds=1)
@@ -424,7 +425,7 @@ class RLTrainer(Trainer):
                 self._summarize_training_setting()
 
             # check termination
-            env_steps_metric = self._algorithm.get_step_metrics()[1]
+            env_steps_metric = self._algorithm.module.get_step_metrics()[1]
             total_time_steps = env_steps_metric.result()
             iter_num += 1
 
@@ -462,7 +463,7 @@ class RLTrainer(Trainer):
         checkpointer = Checkpointer(
             ckpt_dir=os.path.join(self._train_dir, 'algorithm'),
             algorithm=self._algorithm,
-            metrics=nn.ModuleList(self._algorithm.get_metrics()),
+            metrics=nn.ModuleList(self._algorithm.module.get_metrics()),
             trainer_progress=self._trainer_progress)
 
         super()._restore_checkpoint(checkpointer)

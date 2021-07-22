@@ -133,11 +133,12 @@ class ActorCriticAlgorithm(OnPolicyAlgorithm):
 
     def rollout_step(self, inputs: TimeStep, state: ActorCriticState):
         """Rollout for one step."""
+        observation = inputs.observation.to(alf.PerProcessContext().rank)
         value, value_state = self._value_network(
-            inputs.observation, state=state.value)
+            observation, state=state.value)
 
         action_distribution, actor_state = self._actor_network(
-            inputs.observation, state=state.actor)
+            observation, state=state.actor)
 
         action = dist_utils.sample_action_distribution(action_distribution)
         return AlgStep(

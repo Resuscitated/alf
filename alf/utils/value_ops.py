@@ -146,11 +146,12 @@ def discounted_return(rewards, values, step_types, discounts, time_major=True):
                                       s=values.shape[0]))
 
     is_lasts = (step_types == StepType.LAST).to(dtype=torch.float32)
-    is_lasts = common.expand_dims_as(is_lasts, values)
-    discounts = common.expand_dims_as(discounts, values)
+    is_lasts = common.expand_dims_as(is_lasts, values).to(alf.PerProcessContext().rank)
+    discounts = common.expand_dims_as(discounts, values).to(alf.PerProcessContext().rank)
 
-    rets = torch.zeros_like(values)
+    rets = torch.zeros_like(values).to(alf.PerProcessContext().rank)
     rets[-1] = values[-1]
+    rewards = rewards.to(alf.PerProcessContext().rank)
 
     with torch.no_grad():
         for t in reversed(range(rewards.shape[0] - 1)):
@@ -242,12 +243,13 @@ def generalized_advantage_estimation(rewards,
                                       s=values.shape[0]))
 
     is_lasts = (step_types == StepType.LAST).to(dtype=torch.float32)
-    is_lasts = common.expand_dims_as(is_lasts, values)
-    discounts = common.expand_dims_as(discounts, values)
+    is_lasts = common.expand_dims_as(is_lasts, values).to(alf.PerProcessContext().rank)
+    discounts = common.expand_dims_as(discounts, values).to(alf.PerProcessContext().rank)
 
+    rewards = rewards.to(alf.PerProcessContext().rank)
     weighted_discounts = discounts[1:] * td_lambda
 
-    advs = torch.zeros_like(values)
+    advs = torch.zeros_like(values).to(alf.PerProcessContext().rank)
     delta = rewards[1:] + discounts[1:] * values[1:] - values[:-1]
 
     with torch.no_grad():

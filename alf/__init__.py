@@ -23,6 +23,7 @@ from . import optimizers
 from . import summary
 from . import test
 from .utils import math_ops as math
+from .utils.per_process_context import PerProcessContext
 
 from .device_ctx import *
 from .tensor_specs import *

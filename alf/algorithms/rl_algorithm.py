@@ -464,7 +464,6 @@ class RLAlgorithm(Algorithm):
         # training after the next unroll.
         self._current_policy_state = common.detach(policy_state)
         self._current_transform_state = common.detach(trans_state)
-
         return experience
 
     def train_iter(self):
